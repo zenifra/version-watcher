@@ -1,5 +1,7 @@
 # Version Watcher
 
+[![CI](https://github.com/zenifra/version-watcher/actions/workflows/ci.yml/badge.svg)](https://github.com/zenifra/version-watcher/actions/workflows/ci.yml)
+
 A self-hosted dashboard that finds what your GitHub repositories depend on and tells you, every day, what is behind — by patch, minor or major — with the release notes next to it.
 
 It reads the manifests straight from GitHub, so there is nothing to install in your repositories and no list to maintain. Infrastructure that does not live in a manifest (Kubernetes, Longhorn, Rancher…) can be added by hand.
