@@ -48,6 +48,10 @@ export function App() {
           ))}
         </nav>
         <RunBar onAuthError={onAuthError} onFinished={() => setGeneration((g) => g + 1)} />
+        <button type="button" onClick={() => api('/logout', { method: 'POST', body: {} }).finally(() => setAuthed(false))}
+          className="text-sm text-zinc-600 underline hover:text-zinc-900">
+          Sign out
+        </button>
       </header>
       {page === 'infra' ? (
         <Infra key={generation} onAuthError={onAuthError} />

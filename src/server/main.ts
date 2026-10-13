@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { createApp } from './app.ts';
-import { createChecker } from './check.ts';
+import { createChecker, scheduleChecks } from './check.ts';
 import { type Config, ConfigError, loadConfig } from './config.ts';
 import { lastFinishedAt, openDb } from './db.ts';
 
@@ -30,7 +30,4 @@ createApp({ db, config, checker, webDir }).listen(config.port, () => {
   console.log(`version-watcher listening on port ${config.port}`);
 });
 
-const intervalMs = config.intervalHours * 3600 * 1000;
-const last = lastFinishedAt(db);
-if (!last || Date.now() - Date.parse(last) >= intervalMs) checker.start();
-setInterval(() => checker.start(), intervalMs);
+scheduleChecks(checker, lastFinishedAt(db), config.intervalHours * 3600 * 1000);

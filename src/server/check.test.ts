@@ -1,6 +1,6 @@
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createChecker, runCheck } from './check.ts';
+import { type Checker, createChecker, runCheck, scheduleChecks } from './check.ts';
 import type { Config } from './config.ts';
 import { listRepos, listRuns, openDb } from './db.ts';
 import { stubFetch } from './test-helpers.ts';
@@ -86,4 +86,39 @@ test('only one check at a time', async () => {
   await checker.idle();
   assert.equal(checker.running, false);
   assert.equal(listRuns(db, 5).length, 1);
+});
+
+test('a storage failure is logged, never an unhandled rejection', async () => {
+  const db = openDb(':memory:');
+  db.exec('drop table runs');
+  const checker = createChecker({ db, config, fetch: stubFetch(routes()) });
+  assert.equal(checker.start(), true);
+  await checker.idle();
+  assert.equal(checker.running, false);
+  assert.equal(checker.start(), true);
+  await checker.idle();
+});
+
+test('after a restart the next check waits only for the rest of the interval', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  try {
+    let starts = 0;
+    const fake: Checker = { running: false, start: () => { starts++; return true; }, idle: async () => {} };
+    const hour = 3600 * 1000;
+    const now = Date.parse('2026-10-13T12:00:00Z');
+    scheduleChecks(fake, new Date(now - 23 * hour).toISOString(), 24 * hour, now);
+    mock.timers.tick(hour - 1);
+    assert.equal(starts, 0);
+    mock.timers.tick(1);
+    assert.equal(starts, 1);
+    mock.timers.tick(24 * hour);
+    assert.equal(starts, 2);
+
+    starts = 0;
+    scheduleChecks(fake, null, 24 * hour, now);
+    mock.timers.tick(0);
+    assert.equal(starts, 1);
+  } finally {
+    mock.timers.reset();
+  }
 });

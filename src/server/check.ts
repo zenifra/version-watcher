@@ -108,13 +108,25 @@ export function createChecker(deps: CheckDeps): Checker {
     },
     start() {
       if (current) return false;
-      current = runCheck(deps).finally(() => {
-        current = null;
-      });
+      current = runCheck(deps)
+        .catch((e) => console.error('check failed:', (e as Error).message))
+        .finally(() => {
+          current = null;
+        });
       return true;
     },
     async idle() {
       await current;
     },
   };
+}
+
+// First check when the interval since the last one runs out (immediately if never),
+// then every interval. A restart therefore never pushes a due check further away.
+export function scheduleChecks(checker: Checker, lastFinishedAt: string | null, intervalMs: number, now = Date.now()): void {
+  const wait = lastFinishedAt ? Math.max(0, Date.parse(lastFinishedAt) + intervalMs - now) : 0;
+  setTimeout(() => {
+    checker.start();
+    setInterval(() => checker.start(), intervalMs);
+  }, wait);
 }
