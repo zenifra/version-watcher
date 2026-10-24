@@ -1,7 +1,7 @@
 import { type FormEvent, useEffect, useState } from 'react';
 import type { IgnoredRow, UpdateRow } from '../server/updates.ts';
 import { api, type OnAuthError } from './api.ts';
-import { BumpBadge } from './Updates.tsx';
+import { TargetCell } from './Updates.tsx';
 
 interface PackagesResponse {
   manual: UpdateRow[];
@@ -57,7 +57,7 @@ export function Infra({ onAuthError }: { onAuthError: OnAuthError }) {
       <div className="overflow-x-auto">
         <table className="w-full text-left">
           <thead className="text-xs uppercase text-zinc-500">
-            <tr><th className="py-2 pr-3">Name</th><th className="pr-3">Releases repo</th><th className="pr-3">In use</th><th className="pr-3">Latest</th><th className="pr-3">Bump</th><th /></tr>
+            <tr><th className="py-2 pr-3">Name</th><th className="pr-3">Releases repo</th><th className="pr-3">In use</th><th className="pr-3">Minor / patch</th><th className="pr-3">Major</th><th /></tr>
           </thead>
           <tbody>
             {data?.manual.map((row) => (
@@ -102,8 +102,8 @@ function InfraRow({ row, onSaved, onError }: { row: UpdateRow; onSaved: () => vo
           className="w-28 rounded border border-zinc-300 bg-white px-2 py-1" />
         <button type="button" onClick={save} className="ml-2 text-blue-700 underline">Save</button>
       </td>
-      <td className="pr-3">{row.latest ?? '—'}</td>
-      <td className="pr-3"><BumpBadge bump={row.bump} /></td>
+      <td className="pr-3"><TargetCell target={row.minor} /></td>
+      <td className="pr-3"><TargetCell target={row.major} /></td>
       <td><button type="button" onClick={remove} className="text-red-700 underline">Remove</button></td>
     </tr>
   );

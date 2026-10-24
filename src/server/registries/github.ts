@@ -13,6 +13,11 @@ interface ApiRelease { tag_name: string; draft: boolean; prerelease: boolean; pu
 
 const API = 'https://api.github.com';
 
+export function githubRepoName(url: string | undefined): string | null {
+  const m = url ? /github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?(?:[#/].*)?$/.exec(url) : null;
+  return m ? m[1] : null;
+}
+
 export function githubClient(f: FetchFn, token: string) {
   const headers = {
     authorization: `Bearer ${token}`,

@@ -20,5 +20,12 @@ export interface Release {
   notes: string | null;
 }
 
+// What a registry knows about a package. notesRepo is the GitHub repository
+// ("owner/name") whose releases carry the notes the registry itself lacks.
+export interface Releases {
+  releases: Release[];
+  notesRepo: string | null;
+}
+
 // Pins whose version can be compared against releases.
 export const COMPARABLE: ReadonlySet<Pin> = new Set<Pin>(['exact', 'range', 'digest']);

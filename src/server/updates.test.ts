@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ensurePackage, openDb, replaceRepoUsages, saveReleases, setIgnored } from './db.ts';
-import { listPackages, listUpdates, packageDetail } from './updates.ts';
+import { listPackages, listUpdates, packageDetail, type Upgrade } from './updates.ts';
 
 const rel = (version: string, publishedAt: string) => ({ version, publishedAt, url: null, notes: null });
 
@@ -28,7 +28,7 @@ function seed() {
 
 test('lists only packages behind, most severe and longest behind first', () => {
   const { db } = seed();
-  assert.deepEqual(listUpdates(db, {}).map((r) => `${r.label} ${r.bump} ${r.latest} ${r.behindSince}`), [
+  assert.deepEqual(listUpdates(db, {}).map((r) => `${r.label} ${r.bump} ${(r.major ?? r.minor)?.to} ${r.behindSince}`), [
     'express major 5.0.0 2026-01-01',
     'Longhorn patch v1.7.3 2026-04-01',
   ]);
@@ -58,10 +58,35 @@ test('ignored packages leave the list and show up in listPackages', () => {
   assert.deepEqual(ignored.map((r) => r.label), ['express']);
 });
 
-test('packageDetail lists newer releases relative to the oldest use', () => {
-  const { db, ids } = seed();
-  const d = packageDetail(db, ids.express)!;
-  assert.deepEqual(d.releases.map((r) => `${r.version}:${r.bump}`), ['5.0.0:major', '4.21.0:minor', '4.19.3:patch']);
-  assert.deepEqual(d.uses.map((u) => u.repo), ['acme/api', 'acme/web']);
+test('rows point at the newest minor/patch and the newest major of the oldest use', () => {
+  const { db } = seed();
+  const express = listUpdates(db, {}).find((r) => r.label === 'express')!;
+  assert.deepEqual([express.minor, express.major], [{ to: '4.21.0', bump: 'minor' }, { to: '5.0.0', bump: 'major' }]);
+  const checkout = listUpdates(db, { all: true }).find((r) => r.label === 'actions/checkout')!;
+  assert.deepEqual([checkout.minor, checkout.major], [null, null]);
+});
+
+test('packageDetail: per version in use, a minor/patch and a major upgrade with every release in between', () => {
+  const db = openDb(':memory:');
+  const found = (version: string) => [{ ecosystem: 'docker' as const, name: 'node:#.#.#-alpine', version, pin: 'exact' as const, file: 'Dockerfile' }];
+  replaceRepoUsages(db, 'acme/api', found('24.12.0'));
+  replaceRepoUsages(db, 'acme/jobs', found('24.12.0'));
+  replaceRepoUsages(db, 'acme/web', found('26.0.0'));
+  const { id } = db.prepare('select id from packages').get() as { id: number };
+  saveReleases(db, id, ['24.12.1', '24.13.0', '24.13.1', '25.0.0', '26.0.0', '26.0.1'].map((v) => rel(v, '2026-01-01')));
+  const upgrade = (u: Upgrade | null) => u && `${u.to} ${u.bump}: ${u.releases.map((r) => r.version).join(' ')}`;
+  assert.deepEqual(packageDetail(db, id)!.paths.map((p) => [p.version, p.repos, upgrade(p.minor), upgrade(p.major)]), [
+    ['24.12.0', ['acme/api', 'acme/jobs'], '24.13.1 minor: 24.13.1 24.13.0 24.12.1', '26.0.1 major: 26.0.1 26.0.0 25.0.0'],
+    ['26.0.0', ['acme/web'], '26.0.1 patch: 26.0.1', null],
+  ]);
   assert.equal(packageDetail(db, 9999), null);
+});
+
+test('packageDetail: a floating major tag only has a major upgrade; uncomparable pins have no paths', () => {
+  const { db, ids } = seed();
+  saveReleases(db, ids['actions/checkout'], [rel('v4.2.2', '2026-02-01'), rel('v5.0.0', '2026-05-01')]);
+  const [checkout] = packageDetail(db, ids['actions/checkout'])!.paths;
+  assert.equal(checkout.minor, null);
+  assert.equal(checkout.major?.to, 'v5.0.0');
+  assert.deepEqual(packageDetail(db, ids['org/tool'])!.paths, []);
 });

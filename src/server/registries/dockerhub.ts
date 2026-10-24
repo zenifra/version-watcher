@@ -1,15 +1,18 @@
 import { type FetchFn, getJson } from '../http.ts';
-import type { Release } from '../types.ts';
+import type { Release, Releases } from '../types.ts';
 
 interface TagPage {
   next: string | null;
   results: { name: string; last_updated: string | null }[];
 }
 
+// Docker Hub has no release notes; these images publish them as GitHub releases.
+const NOTES_REPOS: Record<string, string> = { node: 'nodejs/node' };
+
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // name is "<image>:<pattern>" from readers/docker.ts, e.g. "node:#-alpine".
-export async function dockerHubReleases(f: FetchFn, name: string): Promise<Release[]> {
+export async function dockerHubReleases(f: FetchFn, name: string): Promise<Releases> {
   const colon = name.lastIndexOf(':');
   const image = name.slice(0, colon);
   const pattern = name.slice(colon + 1);
@@ -34,5 +37,5 @@ export async function dockerHubReleases(f: FetchFn, name: string): Promise<Relea
     }
     url = data.next;
   }
-  return out;
+  return { releases: out, notesRepo: NOTES_REPOS[image] ?? null };
 }

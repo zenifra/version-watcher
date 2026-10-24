@@ -4,7 +4,7 @@ import { type Checker, createChecker, runCheck, scheduleChecks } from './check.t
 import type { Config } from './config.ts';
 import { listRepos, listRuns, openDb } from './db.ts';
 import { stubFetch } from './test-helpers.ts';
-import { listUpdates } from './updates.ts';
+import { listUpdates, packageDetail } from './updates.ts';
 
 const config: Config = {
   port: 0, githubToken: 't', owners: ['acme'], authPassword: 'p', authDisabled: false,
@@ -54,7 +54,7 @@ test('full check: scans repos, isolates failures, stores releases', async () => 
   ]);
   assert.match(listRepos(db).find((r) => r.name === 'acme/half')!.error!, /^package\.json: /);
   // major before minor, then the longest behind first
-  assert.deepEqual(listUpdates(db, {}).map((r) => `${r.ecosystem} ${r.label} ${r.bump} ${r.latest}`), [
+  assert.deepEqual(listUpdates(db, {}).map((r) => `${r.ecosystem} ${r.label} ${r.bump} ${(r.major ?? r.minor)?.to}`), [
     'npm express major 5.1.0',
     'docker node:#-alpine major 26',
     'actions actions/checkout major v5.0.0',
@@ -65,6 +65,42 @@ test('full check: scans repos, isolates failures, stores releases', async () => 
   assert.equal(run.packagesChecked, 4);
   assert.ok(run.errors.some((e) => e.startsWith('acme/secret: HTTP 403')));
   assert.ok(run.errors.some((e) => e.startsWith('acme/half/package.json')));
+});
+
+test('notes missing from the registry come from the GitHub releases of the source repository', async () => {
+  const db = openDb(':memory:');
+  const versions = ['4.19.2', '4.19.3', '4.21.2', '5.1.0', '@other/pkg@5.1.0'];
+  await runCheck({ db, config, fetch: stubFetch(routes({
+    'https://registry.npmjs.org/express': {
+      versions: Object.fromEntries(versions.slice(0, 4).map((v) => [v, {}])),
+      repository: { url: 'git+https://github.com/expressjs/express.git' },
+    },
+    [`${GH}/repos/expressjs/express/releases`]: versions.slice(1).map((tag) => ({
+      tag_name: tag.startsWith('4.19') ? `v${tag}` : tag, draft: false, prerelease: false, published_at: null,
+      html_url: `https://github.com/expressjs/express/releases/tag/${tag}`, body: `notes ${tag}`,
+    })),
+  })) });
+  const express = listUpdates(db, {}).find((r) => r.label === 'express')!;
+  const [path] = packageDetail(db, express.id)!.paths;
+  assert.deepEqual(path.minor!.releases.map((r) => [r.version, r.notes]), [['4.21.2', 'notes 4.21.2'], ['4.19.3', 'notes 4.19.3']]);
+  assert.equal(path.minor!.releases[1].url, 'https://github.com/expressjs/express/releases/tag/4.19.3');
+  assert.deepEqual(path.major!.releases.map((r) => [r.version, r.notes]), [['5.1.0', 'notes 5.1.0']]);
+  // nodejs/node is not stubbed (404): the image keeps its Docker Hub link, and the run records no error for it
+  assert.equal(packageDetail(db, listUpdates(db, { ecosystem: 'docker' })[0].id)!.paths[0].major!.releases[0].notes, null);
+  assert.equal(listRuns(db, 1)[0].errors.filter((e) => e.includes('node')).length, 0);
+});
+
+test('keeps up to 50 releases per major line, so a busy new major never hides the minor line in use', async () => {
+  const db = openDb(':memory:');
+  const versions = ['4.19.2', '4.19.3', '4.21.2', ...Array.from({ length: 120 }, (_, i) => `5.0.${i}`)];
+  await runCheck({ db, config, fetch: stubFetch(routes({
+    'https://registry.npmjs.org/express': { versions: Object.fromEntries(versions.map((v) => [v, {}])) },
+  })) });
+  const express = listUpdates(db, {}).find((r) => r.label === 'express')!;
+  const [path] = packageDetail(db, express.id)!.paths;
+  assert.equal(path.minor!.to, '4.21.2');
+  assert.equal(path.major!.to, '5.0.119');
+  assert.equal(path.major!.releases.length, 50);
 });
 
 test('rate limit stops the run and is recorded', async () => {

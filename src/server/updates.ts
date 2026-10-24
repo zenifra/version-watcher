@@ -17,9 +17,28 @@ export interface UpdateRow {
   label: string;
   source: 'scan' | 'manual';
   uses: Use[];
-  latest: string | null;
   bump: Bump | null;
+  // Targets for the oldest version in use.
+  minor: Target | null;
+  major: Target | null;
   behindSince: string | null;
+}
+
+export interface Target {
+  to: string;
+  bump: Bump;
+}
+
+export interface Upgrade extends Target {
+  // Newest first: the target, then every release between it and the version in use.
+  releases: Release[];
+}
+
+export interface UpgradePaths {
+  version: string;
+  repos: string[];
+  minor: Upgrade | null; // newest release on the same major line
+  major: Upgrade | null; // newest release on a later major line
 }
 
 export interface UpdateFilter {
@@ -32,7 +51,7 @@ export interface UpdateFilter {
 
 export interface PackageDetail extends UpdateRow {
   ignored: boolean;
-  releases: (Release & { bump: Bump | null })[];
+  paths: UpgradePaths[];
 }
 
 export interface IgnoredRow {
@@ -68,6 +87,20 @@ function releasesOf(db: DatabaseSync, id: number): Release[] {
   return rows.sort((a, b) => compareVersions(b.version, a.version));
 }
 
+function upgradesFrom(version: string, releases: Release[]): Pick<UpgradePaths, 'minor' | 'major'> {
+  const major = parseVersion(version)![0];
+  const newer = releases.filter((r) => bumpOf(version, r.version));
+  const upgrade = (rs: Release[]): Upgrade | null =>
+    rs.length ? { to: rs[0].version, bump: bumpOf(version, rs[0].version)!, releases: rs } : null;
+  return {
+    minor: upgrade(newer.filter((r) => parseVersion(r.version)![0] === major)),
+    major: upgrade(newer.filter((r) => parseVersion(r.version)![0] > major)),
+  };
+}
+
+const comparable = (uses: Use[]) => uses.filter((u) => COMPARABLE.has(u.pin) && parseVersion(u.version));
+const target = (u: Upgrade | null): Target | null => u && { to: u.to, bump: u.bump };
+
 function summarize(p: PackageRow, uses: Use[], releases: Release[]): UpdateRow {
   let bump: Bump | null = null;
   let behindSince: string | null = null;
@@ -80,9 +113,11 @@ function summarize(p: PackageRow, uses: Use[], releases: Release[]): UpdateRow {
     const oldest = newer[newer.length - 1].publishedAt;
     if (oldest && (!behindSince || oldest < behindSince)) behindSince = oldest;
   }
+  const oldest = comparable(uses).map((u) => u.version).sort(compareVersions)[0];
+  const { minor, major } = oldest ? upgradesFrom(oldest, releases) : { minor: null, major: null };
   return {
     id: p.id, ecosystem: p.ecosystem, name: p.name, label: p.label, source: p.source, uses,
-    latest: releases[0]?.version ?? null, bump, behindSince,
+    bump, minor: target(minor), major: target(major), behindSince,
   };
 }
 
@@ -112,16 +147,14 @@ export function packageDetail(db: DatabaseSync, id: number): PackageDetail | nul
   if (!p) return null;
   const uses = usesOf(db, p);
   const releases = releasesOf(db, id);
-  const min = uses
-    .filter((u) => COMPARABLE.has(u.pin) && parseVersion(u.version))
-    .map((u) => u.version)
-    .sort(compareVersions)[0];
+  const repos = new Map<string, Set<string>>();
+  for (const u of comparable(uses)) repos.set(u.version, (repos.get(u.version) ?? new Set()).add(u.repo));
   return {
     ...summarize(p, uses, releases),
     ignored: p.ignored === 1,
-    releases: min
-      ? releases.filter((r) => parseVersion(r.version) && compareVersions(r.version, min) > 0).map((r) => ({ ...r, bump: bumpOf(min, r.version) }))
-      : [],
+    paths: [...repos]
+      .sort(([a], [b]) => compareVersions(a, b))
+      .map(([version, inRepos]) => ({ version, repos: [...inRepos], ...upgradesFrom(version, releases) })),
   };
 }
 
