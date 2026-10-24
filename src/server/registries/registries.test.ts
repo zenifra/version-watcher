@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { stubFetch } from '../test-helpers.ts';
 import { dockerHubReleases } from './dockerhub.ts';
-import { githubClient } from './github.ts';
+import { githubClient, githubRepoName } from './github.ts';
 import { npmReleases } from './npm.ts';
 import { pypiReleases } from './pypi.ts';
 
@@ -49,17 +49,22 @@ test('npm: scoped names, publish times and GitHub release links', async () => {
     },
     'https://registry.npmjs.org/plain': { versions: { '1.0.0': {} }, time: {} },
   });
-  assert.deepEqual(await npmReleases(f, '@types/node'), [
-    { version: '24.0.0', publishedAt: '2026-01-01T00:00:00Z', url: 'https://github.com/DefinitelyTyped/DefinitelyTyped/releases', notes: null },
-    { version: '24.1.0', publishedAt: '2026-02-01T00:00:00Z', url: 'https://github.com/DefinitelyTyped/DefinitelyTyped/releases', notes: null },
-  ]);
-  assert.equal((await npmReleases(f, 'plain'))[0].url, 'https://www.npmjs.com/package/plain/v/1.0.0');
+  assert.deepEqual(await npmReleases(f, '@types/node'), {
+    notesRepo: 'DefinitelyTyped/DefinitelyTyped',
+    releases: [
+      { version: '24.0.0', publishedAt: '2026-01-01T00:00:00Z', url: 'https://github.com/DefinitelyTyped/DefinitelyTyped/releases', notes: null },
+      { version: '24.1.0', publishedAt: '2026-02-01T00:00:00Z', url: 'https://github.com/DefinitelyTyped/DefinitelyTyped/releases', notes: null },
+    ],
+  });
+  const plain = await npmReleases(f, 'plain');
+  assert.equal(plain.notesRepo, null);
+  assert.equal(plain.releases[0].url, 'https://www.npmjs.com/package/plain/v/1.0.0');
 });
 
 test('pypi: skips yanked/empty releases and only links http(s) changelogs', async () => {
   const f = stubFetch({
     'https://pypi.org/pypi/django/json': {
-      info: { project_urls: { Changelog: 'https://docs.djangoproject.com/en/stable/releases/' } },
+      info: { project_urls: { Changelog: 'https://docs.djangoproject.com/en/stable/releases/', Source: 'https://github.com/django/django' } },
       releases: {
         '5.1.2': [{ upload_time_iso_8601: '2026-01-01T00:00:00Z', yanked: false }],
         '5.1.1': [{ upload_time_iso_8601: '2025-12-01T00:00:00Z', yanked: true }],
@@ -71,10 +76,13 @@ test('pypi: skips yanked/empty releases and only links http(s) changelogs', asyn
       releases: { '1.0.0': [{ upload_time_iso_8601: null, yanked: false }] },
     },
   });
-  assert.deepEqual(await pypiReleases(f, 'django'), [
-    { version: '5.1.2', publishedAt: '2026-01-01T00:00:00Z', url: 'https://docs.djangoproject.com/en/stable/releases/', notes: null },
-  ]);
-  assert.equal((await pypiReleases(f, 'evil'))[0].url, 'https://pypi.org/project/evil/');
+  assert.deepEqual(await pypiReleases(f, 'django'), {
+    notesRepo: 'django/django',
+    releases: [{ version: '5.1.2', publishedAt: '2026-01-01T00:00:00Z', url: 'https://docs.djangoproject.com/en/stable/releases/', notes: null }],
+  });
+  const evil = await pypiReleases(f, 'evil');
+  assert.equal(evil.notesRepo, null);
+  assert.equal(evil.releases[0].url, 'https://pypi.org/project/evil/');
 });
 
 test('docker hub: same variant and precision only, follows pagination', async () => {
@@ -92,8 +100,19 @@ test('docker hub: same variant and precision only, follows pagination', async ()
       results: [{ name: '25-alpine', last_updated: '2026-04-01T00:00:00Z' }],
     },
   });
-  assert.deepEqual(await dockerHubReleases(f, 'node:#-alpine'), [
-    { version: '26', publishedAt: '2026-10-01T00:00:00Z', url: 'https://hub.docker.com/_/node/tags?name=alpine', notes: null },
-    { version: '25', publishedAt: '2026-04-01T00:00:00Z', url: 'https://hub.docker.com/_/node/tags?name=alpine', notes: null },
-  ]);
+  assert.deepEqual(await dockerHubReleases(f, 'node:#-alpine'), {
+    notesRepo: 'nodejs/node',
+    releases: [
+      { version: '26', publishedAt: '2026-10-01T00:00:00Z', url: 'https://hub.docker.com/_/node/tags?name=alpine', notes: null },
+      { version: '25', publishedAt: '2026-04-01T00:00:00Z', url: 'https://hub.docker.com/_/node/tags?name=alpine', notes: null },
+    ],
+  });
+});
+
+test('githubRepoName: owner/name from repository URLs', () => {
+  assert.equal(githubRepoName('git+https://github.com/expressjs/express.git'), 'expressjs/express');
+  assert.equal(githubRepoName('git@github.com:acme/tool.git'), 'acme/tool');
+  assert.equal(githubRepoName('https://github.com/acme/mono/tree/main/packages/a'), 'acme/mono');
+  assert.equal(githubRepoName('https://gitlab.com/acme/tool'), null);
+  assert.equal(githubRepoName(undefined), null);
 });

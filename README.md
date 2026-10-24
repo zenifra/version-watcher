@@ -8,13 +8,13 @@ It reads the manifests straight from GitHub, so there is nothing to install in y
 
 ## What it watches
 
-| Ecosystem | Read from | New versions from |
-|---|---|---|
-| npm / Bun | `package.json` (`dependencies` + `devDependencies`), versions resolved from `package-lock.json` or `bun.lock` | npm registry |
-| PyPI | `requirements*.txt`, `pyproject.toml` (`[project].dependencies`) | PyPI |
-| GitHub Actions | `uses:` in `.github/workflows/*.yml` | GitHub releases (tags as a fallback) |
-| Docker base images | `FROM` lines in `Dockerfile*` | Docker Hub tags |
-| Infra | Manual entries, e.g. `kubernetes/kubernetes`, `longhorn/longhorn`, `rancher/rke2` | GitHub releases |
+| Ecosystem | Read from | New versions from | Release notes from |
+|---|---|---|---|
+| npm / Bun | `package.json` (`dependencies` + `devDependencies`), versions resolved from `package-lock.json` or `bun.lock` | npm registry | GitHub releases of the package's `repository` |
+| PyPI | `requirements*.txt`, `pyproject.toml` (`[project].dependencies`) | PyPI | GitHub releases of the first GitHub link in the project URLs |
+| GitHub Actions | `uses:` in `.github/workflows/*.yml` | GitHub releases (tags as a fallback) | Same releases |
+| Docker base images | `FROM` lines in `Dockerfile*` | Docker Hub tags | GitHub releases for `node` (`nodejs/node`); a link to the tags otherwise |
+| Infra | Manual entries, e.g. `kubernetes/kubernetes`, `longhorn/longhorn`, `rancher/rke2` | GitHub releases | Same releases |
 
 Every non-archived repository the token can see is scanned (optionally limited to some owners). A check runs on start-up when the last one is older than the interval, then on that interval, and whenever you press **Check now**.
 
@@ -58,6 +58,9 @@ A fine-grained token covers a single owner. To watch several owners, run one ins
 
 ## How versions are compared
 
+- Every version in use gets up to two upgrades: **minor / patch**, the newest release on the same major line, and **major**, the newest release on a later major line. `24.12.0` with `24.13.1` and `26.0.1` published shows both. Each upgrade lists the release notes of the new version and, folded below, of every release in between.
+- Release notes from GitHub are matched by tag: `1.2.3`, `v1.2.3` or `<package>@1.2.3` (monorepos), among the newest 100 releases of the repository.
+- Up to 50 releases are kept per major line, so a busy new major never hides the newest release of the line in use.
 - Only stable versions count: `1`, `1.2` or `1.2.3`, with an optional `v` prefix and `+build` suffix. Prereleases (`-rc.1`, `2.0b1`, `.dev`) are ignored.
 - The version in use sets the precision. `actions/checkout@v4` and `node:24-alpine` follow a major line, so only a new major (`v5`, `node:26-alpine`) is reported; `express 4.19.2` is behind on `4.19.3`.
 - Docker tags are compared only with tags of the same variant (`-alpine`, `-bookworm-slim`). A variant with a version inside it (`alpine3.22`) does not see the next one (`alpine3.23`).

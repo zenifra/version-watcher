@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from 'react';
 import type { RepoRow } from '../server/db.ts';
-import type { Bump } from '../server/types.ts';
-import type { PackageDetail, UpdateRow, Use } from '../server/updates.ts';
+import type { Bump, Release } from '../server/types.ts';
+import type { PackageDetail, Target, UpdateRow, Upgrade, Use } from '../server/updates.ts';
 import { api, isHttpUrl, type OnAuthError } from './api.ts';
 
 const ECOSYSTEMS = ['npm', 'pypi', 'actions', 'docker', 'infra'];
@@ -16,6 +16,11 @@ export function BumpBadge({ bump }: { bump: Bump | null }) {
   return <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${BUMP_STYLE[bump]}`}>{bump}</span>;
 }
 
+export function TargetCell({ target }: { target: Target | null }) {
+  if (!target) return <span className="text-zinc-400">—</span>;
+  return <span className="flex items-center gap-1.5">{target.to} <BumpBadge bump={target.bump} /></span>;
+}
+
 function describe(u: Use): string {
   if (u.pin === 'sha') return `${u.version.slice(0, 7)} (SHA)`;
   if (u.pin === 'floating') return `${u.version} (floating)`;
@@ -24,11 +29,13 @@ function describe(u: Use): string {
   return u.version;
 }
 
+const repoName = (repo: string) => (repo === 'manual' ? 'manual entry' : repo.split('/').pop()!);
+
 export function inUse(uses: Use[]): string {
   const groups = new Map<string, Set<string>>();
   for (const u of uses) {
     const key = describe(u);
-    const where = u.repo === 'manual' ? 'manual entry' : u.repo.split('/').pop()!;
+    const where = repoName(u.repo);
     groups.set(key, (groups.get(key) ?? new Set()).add(where));
   }
   return [...groups].map(([version, repos]) => `${version} in ${[...repos].join(', ')}`).join(' · ');
@@ -82,7 +89,7 @@ export function Updates({ onAuthError }: { onAuthError: OnAuthError }) {
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead className="text-xs uppercase text-zinc-500">
-              <tr><th className="py-2 pr-3">Ecosystem</th><th className="pr-3">Name</th><th className="pr-3">In use</th><th className="pr-3">Latest</th><th className="pr-3">Bump</th><th>Behind since</th></tr>
+              <tr><th className="py-2 pr-3">Ecosystem</th><th className="pr-3">Name</th><th className="pr-3">In use</th><th className="pr-3">Minor / patch</th><th className="pr-3">Major</th><th>Behind since</th></tr>
             </thead>
             <tbody>
               {rows.map((r) => (
@@ -96,8 +103,8 @@ export function Updates({ onAuthError }: { onAuthError: OnAuthError }) {
                       </button>
                     </td>
                     <td className="py-2 pr-3">{inUse(r.uses)}</td>
-                    <td className="py-2 pr-3">{r.latest ?? '—'}</td>
-                    <td className="py-2 pr-3"><BumpBadge bump={r.bump} /></td>
+                    <td className="py-2 pr-3"><TargetCell target={r.minor} /></td>
+                    <td className="py-2 pr-3"><TargetCell target={r.major} /></td>
                     <td className="py-2">{r.behindSince?.slice(0, 10) ?? '—'}</td>
                   </tr>
                   {open === r.id && (
@@ -127,21 +134,54 @@ function Detail({ id, onAuthError, onChanged }: { id: number; onAuthError: OnAut
       <ul className="text-xs text-zinc-600">
         {detail.uses.map((u, i) => <li key={i}>{u.repo}{u.file && ` · ${u.file}`} · {describe(u)}</li>)}
       </ul>
-      {detail.releases.length === 0 && <p className="text-sm text-zinc-500">No newer releases recorded.</p>}
-      {detail.releases.map((r) => (
-        <article key={r.version} className="border-l-2 border-zinc-200 pl-3">
-          <header className="flex flex-wrap items-center gap-2">
-            <strong>{r.version}</strong>
-            <BumpBadge bump={r.bump} />
-            {r.publishedAt && <span className="text-xs text-zinc-500">{r.publishedAt.slice(0, 10)}</span>}
-            {isHttpUrl(r.url) && (
-              <a href={r.url} target="_blank" rel="noreferrer noopener" className="text-xs text-blue-700 underline">Release notes</a>
-            )}
-          </header>
-          {r.notes && <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap font-sans text-xs text-zinc-700">{r.notes}</pre>}
-        </article>
+      {detail.paths.length === 0 && <p className="text-sm text-zinc-500">No comparable version in use.</p>}
+      {detail.paths.map((p) => (
+        <div key={p.version} className="space-y-2">
+          <h3 className="text-sm font-semibold">{p.version} <span className="font-normal text-zinc-500">in {p.repos.map(repoName).join(', ')}</span></h3>
+          {!p.minor && !p.major && <p className="text-sm text-zinc-500">Up to date.</p>}
+          <UpgradeNotes title="Minor / patch" from={p.version} upgrade={p.minor} />
+          <UpgradeNotes title="Major" from={p.version} upgrade={p.major} />
+        </div>
       ))}
       <button type="button" onClick={ignore} className="rounded border border-zinc-300 px-3 py-1 text-sm">Ignore</button>
     </div>
+  );
+}
+
+function UpgradeNotes({ title, from, upgrade }: { title: string; from: string; upgrade: Upgrade | null }) {
+  if (!upgrade) return null;
+  const [target, ...between] = upgrade.releases;
+  return (
+    <div className="rounded border border-zinc-200 p-2">
+      <p className="mb-1 flex items-center gap-2 text-xs font-medium uppercase text-zinc-500">
+        {title}: {from} → {upgrade.to} <BumpBadge bump={upgrade.bump} />
+      </p>
+      <ReleaseNotes release={target} />
+      {between.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs text-zinc-600">
+            {between.length} release{between.length > 1 ? 's' : ''} between {from} and {upgrade.to}
+          </summary>
+          <div className="mt-2 space-y-2">{between.map((r) => <ReleaseNotes key={r.version} release={r} />)}</div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function ReleaseNotes({ release: r }: { release: Release }) {
+  return (
+    <article className="border-l-2 border-zinc-200 pl-3">
+      <header className="flex flex-wrap items-center gap-2">
+        <strong>{r.version}</strong>
+        {r.publishedAt && <span className="text-xs text-zinc-500">{r.publishedAt.slice(0, 10)}</span>}
+        {isHttpUrl(r.url) && (
+          <a href={r.url} target="_blank" rel="noreferrer noopener" className="text-xs text-blue-700 underline">Release notes</a>
+        )}
+      </header>
+      {r.notes
+        ? <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap font-sans text-xs text-zinc-700">{r.notes}</pre>
+        : <p className="mt-1 text-xs text-zinc-500">No notes published with this release.</p>}
+    </article>
   );
 }

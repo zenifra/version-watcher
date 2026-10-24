@@ -1,5 +1,6 @@
 import { type FetchFn, getJson } from '../http.ts';
-import type { Release } from '../types.ts';
+import type { Releases } from '../types.ts';
+import { githubRepoName } from './github.ts';
 
 interface Packument {
   versions?: Record<string, unknown>;
@@ -7,18 +8,14 @@ interface Packument {
   repository?: string | { url?: string };
 }
 
-export function githubRepoUrl(url: string | undefined): string | null {
-  const m = url ? /github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?(?:[#/].*)?$/.exec(url) : null;
-  return m ? `https://github.com/${m[1]}` : null;
-}
-
-export async function npmReleases(f: FetchFn, name: string): Promise<Release[]> {
+export async function npmReleases(f: FetchFn, name: string): Promise<Releases> {
   const doc = await getJson<Packument>(f, `https://registry.npmjs.org/${name.replace('/', '%2f')}`);
-  const repo = githubRepoUrl(typeof doc.repository === 'string' ? doc.repository : doc.repository?.url);
-  return Object.keys(doc.versions ?? {}).map((version) => ({
+  const notesRepo = githubRepoName(typeof doc.repository === 'string' ? doc.repository : doc.repository?.url);
+  const releases = Object.keys(doc.versions ?? {}).map((version) => ({
     version,
     publishedAt: doc.time?.[version] ?? null,
-    url: repo ? `${repo}/releases` : `https://www.npmjs.com/package/${name}/v/${version}`,
+    url: notesRepo ? `https://github.com/${notesRepo}/releases` : `https://www.npmjs.com/package/${name}/v/${version}`,
     notes: null,
   }));
+  return { releases, notesRepo };
 }

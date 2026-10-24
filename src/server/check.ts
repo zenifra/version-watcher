@@ -9,7 +9,7 @@ import { type GitHub, githubClient, type RepoInfo } from './registries/github.ts
 import { npmReleases } from './registries/npm.ts';
 import { pypiReleases } from './registries/pypi.ts';
 import { manifestPaths, readManifests } from './scan.ts';
-import type { Ecosystem, Release } from './types.ts';
+import type { Ecosystem, Release, Releases } from './types.ts';
 import { compareVersions, parseVersion } from './version.ts';
 
 export interface CheckDeps {
@@ -25,16 +25,48 @@ export interface Checker {
   idle(): Promise<void>;
 }
 
-const MAX_RELEASES = 100;
+// Per major line, so a busy new major never pushes out the minor line in use;
+// the total cap bounds packages that bump the major on every release.
+const MAX_PER_MAJOR = 50;
+const MAX_RELEASES = 300;
 
-function fetchReleases(pkg: { ecosystem: Ecosystem; name: string }, gh: GitHub, f: FetchFn): Promise<Release[]> {
+async function fetchReleases(pkg: { ecosystem: Ecosystem; name: string }, gh: GitHub, f: FetchFn): Promise<Releases> {
   switch (pkg.ecosystem) {
     case 'npm': return npmReleases(f, pkg.name);
     case 'pypi': return pypiReleases(f, pkg.name);
     case 'docker': return dockerHubReleases(f, pkg.name);
     case 'actions':
-    case 'infra': return gh.releases(pkg.name);
+    case 'infra': return { releases: await gh.releases(pkg.name), notesRepo: null };
   }
+}
+
+function keepPerMajor(newestFirst: Release[]): Release[] {
+  const kept = new Map<number, number>();
+  return newestFirst
+    .filter((r) => {
+      const major = parseVersion(r.version)![0];
+      kept.set(major, (kept.get(major) ?? 0) + 1);
+      return kept.get(major)! <= MAX_PER_MAJOR;
+    })
+    .slice(0, MAX_RELEASES);
+}
+
+// Tags are matched as "1.2.3", "v1.2.3" or "<package>@1.2.3" (monorepos).
+// ponytail: only the newest 100 GitHub releases; older versions keep the registry link.
+async function withNotes(gh: GitHub, repo: string, name: string, releases: Release[]): Promise<Release[]> {
+  if (!releases.length) return releases;
+  let tagged: Release[];
+  try {
+    tagged = await gh.releases(repo);
+  } catch (e) {
+    if (e instanceof RateLimitError) throw e;
+    return releases; // a moved or private repository only costs the notes
+  }
+  const byTag = new Map(tagged.map((t) => [t.version, t]));
+  return releases.map((r) => {
+    const t = byTag.get(r.version) ?? byTag.get(`v${r.version}`) ?? byTag.get(`${name}@${r.version}`);
+    return t?.notes ? { ...r, url: t.url, notes: t.notes } : r;
+  });
 }
 
 async function scanRepo(deps: CheckDeps, gh: GitHub, repo: RepoInfo, at: string): Promise<string[]> {
@@ -81,11 +113,13 @@ export async function runCheck(deps: CheckDeps): Promise<void> {
     // NOTE: sequential on purpose; a daily run of a few hundred packages takes minutes.
     for (const pkg of packagesToCheck(db)) {
       try {
-        const releases = (await fetchReleases(pkg, gh, f))
-          .filter((r) => parseVersion(r.version) && compareVersions(r.version, pkg.minVersion) > 0)
-          .sort((a, b) => compareVersions(b.version, a.version))
-          .slice(0, MAX_RELEASES);
-        saveReleases(db, pkg.id, releases);
+        const { releases: all, notesRepo } = await fetchReleases(pkg, gh, f);
+        const releases = keepPerMajor(
+          all
+            .filter((r) => parseVersion(r.version) && compareVersions(r.version, pkg.minVersion) > 0)
+            .sort((a, b) => compareVersions(b.version, a.version)),
+        );
+        saveReleases(db, pkg.id, notesRepo ? await withNotes(gh, notesRepo, pkg.name, releases) : releases);
         checked++;
       } catch (e) {
         if (e instanceof RateLimitError) throw e;
