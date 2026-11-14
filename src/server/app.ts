@@ -147,9 +147,12 @@ export function createApp({ db, config, checker, webDir, now = Date.now, loginDe
     res.status(404).json({ error: 'not found' });
   });
 
-  app.use(express.static(webDir));
+  // Vite fingerprints /assets/, so a file there never changes; index.html must revalidate.
+  app.use('/assets', express.static(join(webDir, 'assets'), { immutable: true, maxAge: '1y' }));
+  app.use(express.static(webDir, { cacheControl: false, setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
   app.get('/{*path}', (_req, res) => {
-    res.sendFile(join(webDir, 'index.html'));
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(join(webDir, 'index.html'), { cacheControl: false });
   });
 
   app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
