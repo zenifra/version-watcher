@@ -1,6 +1,9 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Server } from 'node:http';
 import { createApp } from './app.ts';
 import { issueSession } from './auth.ts';
@@ -93,4 +96,22 @@ test('unknown api route is a JSON 404', async () => {
   const res = await call('/api/nope', { headers: { cookie } });
   assert.equal(res.status, 404);
   assert.deepEqual(await res.json(), { error: 'not found' });
+});
+
+test('fingerprinted assets are immutable; the page revalidates', async () => {
+  const webDir = mkdtempSync(join(tmpdir(), 'vw-web-'));
+  mkdirSync(join(webDir, 'assets'));
+  writeFileSync(join(webDir, 'index.html'), '<!doctype html>');
+  writeFileSync(join(webDir, 'assets', 'index-abc123.js'), 'x');
+  const app = createApp({ db: openDb(':memory:'), config, checker, webDir, now: () => now, loginDelayMs: 0 });
+  const web = app.listen(0);
+  await new Promise((r) => web.once('listening', r));
+  const at = (path: string) => fetch(`http://127.0.0.1:${(web.address() as AddressInfo).port}${path}`);
+  try {
+    assert.equal((await at('/assets/index-abc123.js')).headers.get('cache-control'), 'public, max-age=31536000, immutable');
+    assert.equal((await at('/')).headers.get('cache-control'), 'no-cache');
+    assert.equal((await at('/repos')).headers.get('cache-control'), 'no-cache');
+  } finally {
+    web.close();
+  }
 });
